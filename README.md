@@ -142,7 +142,6 @@ Prototype/
 |-- infovis.py                   Student attendance chart
 |-- investigate.py               Signature investigation
 |-- robustness.py                Degradation sensitivity harness
-|-- report_figures.py            Report figure generator
 |-- requirements.txt
 `-- README.md
 ```
