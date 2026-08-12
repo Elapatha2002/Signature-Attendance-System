@@ -259,5 +259,156 @@ def _orb_similarity(first: np.ndarray, second: np.ndarray) -> float:
     smaller_set = min(len(first_descriptors), len(second_descriptors))
     return min(1.0, len(good_matches) / max(8, smaller_set))
 
+# --------------------------------------------------------------- comparisons
+
+
+def compare_signatures(
+    reference_path: str | Path, candidate_path: str | Path
+) -> SignatureComparison:
+    """Compare two extracted signature masks and return the weighted score."""
+    reference_path = Path(reference_path)
+    candidate_path = Path(candidate_path)
+    reference = normalize_signature(reference_path)
+    candidate = normalize_signature(candidate_path)
+    soft_reference = _soften(reference)
+    soft_candidate = _soften(candidate)
+
+    scores = {
+        "ncc": _ncc_similarity(soft_reference, soft_candidate),
+        "iou": _iou_similarity(soft_reference, soft_candidate),
+        "profile": _profile_similarity(soft_reference, soft_candidate),
+        "ssim": max(0.0, _ssim(soft_reference, soft_candidate)),
+        "orb": _orb_similarity(soft_reference, soft_candidate),
+    }
+    combined_score = float(
+        np.clip(sum(WEIGHTS[name] * value for name, value in scores.items()), 0.0, 1.0)
+    )
+    return SignatureComparison(
+        reference=reference_path,
+        candidate=candidate_path,
+        ncc_score=scores["ncc"],
+        iou_score=scores["iou"],
+        profile_score=scores["profile"],
+        ssim_score=scores["ssim"],
+        orb_score=scores["orb"],
+        combined_score=combined_score,
+    )
+
+
+def _gaussian_density(value: float, samples: list[float]) -> float:
+    """Kernel density estimate of ``samples`` at ``value`` (Silverman bandwidth)."""
+    if not samples:
+        return 0.0
+    data = np.asarray(samples, dtype=float)
+    spread = float(data.std())
+    if spread <= 1e-6:
+        spread = 0.05
+    bandwidth = max(1.06 * spread * len(data) ** (-0.2), 1e-3)
+    weights = np.exp(-0.5 * ((value - data) / bandwidth) ** 2)
+    return float(weights.mean() / (bandwidth * np.sqrt(2 * np.pi)))
+
+
+def suspicion_probability(score: float, calibration: "Calibration") -> float:
+    """Posterior probability that a comparison score came from a different writer.
+
+    The genuine and impostor score distributions measured by
+    :func:`calibrate_threshold` are turned into densities, and the two are
+    combined with equal priors. The result is a calibrated reading of the
+    evidence, not a probability of forgery: with the ROC area this measure
+    achieves it can only ever prioritise a cell for human review.
+    """
+    genuine = _gaussian_density(score, calibration.genuine_scores)
+    impostor = _gaussian_density(score, calibration.impostor_scores)
+    total = genuine + impostor
+    if total <= 0:
+        return 0.5
+    return float(np.clip(impostor / total, 0.0, 1.0))
+
+
+def consistency_of_each(paths: list[Path]) -> dict[Path, float | None]:
+    """Leave-one-out consistency of every signature against the same student's others.
+
+    Each signature is compared with all the others belonging to that student and
+    the median is kept, because a median is not dragged down by one unusual
+    sample. A student with fewer than three signatures cannot be assessed this
+    way and is reported as ``None``.
+    """
+    if len(paths) < 3:
+        return {path: None for path in paths}
+
+    scores: dict[tuple[int, int], float] = {}
+    for first, second in combinations(range(len(paths)), 2):
+        scores[(first, second)] = compare_signatures(paths[first], paths[second]).combined_score
+
+    result: dict[Path, float | None] = {}
+    for index, path in enumerate(paths):
+        others = [
+            scores[tuple(sorted((index, other)))]
+            for other in range(len(paths))
+            if other != index
+        ]
+        result[path] = float(np.median(others))
+    return result
+
+
+def has_ink(image_path: str | Path, minimum_ratio: float = 0.01) -> bool:
+    """True when a stored mask holds enough ink to be worth comparing."""
+    mask = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    return mask is not None and float((mask > 0).mean()) >= minimum_ratio
+
+
+def collect_samples(records: list) -> dict[str, list[Path]]:
+    """Group usable signature files by student index from database rows.
+
+    ``records`` must provide ``student_index``, ``status`` and ``signature_path``
+    keys, which is what :meth:`AttendanceDatabase.all_signature_paths` returns.
+    """
+    samples: dict[str, list[Path]] = {}
+    for record in records:
+        if record["status"] != "Present" or not record["signature_path"]:
+            continue
+        path = Path(record["signature_path"])
+        if path.exists() and has_ink(path):
+            samples.setdefault(record["student_index"], []).append(path)
+    return {index: paths for index, paths in samples.items() if paths}
+
+
+def calibrate_threshold(
+    samples_by_student: dict[str, list[Path]], margin: float = 0.5
+) -> Calibration:
+    """Derive a decision threshold from genuine and impostor score distributions.
+
+    ``samples_by_student`` maps a student index to that student's extracted
+    signature files. Every within-student pair is a genuine comparison and every
+    between-student pair is an impostor comparison. The threshold is placed
+    between the two means, ``margin`` of the way from the impostor mean towards
+    the genuine mean.
+    """
+    genuine: list[float] = []
+    impostor: list[float] = []
+
+    for paths in samples_by_student.values():
+        for first, second in combinations(paths, 2):
+            genuine.append(compare_signatures(first, second).combined_score)
+
+    students = sorted(samples_by_student)
+    for first_index, second_index in combinations(students, 2):
+        for first in samples_by_student[first_index]:
+            for second in samples_by_student[second_index]:
+                impostor.append(compare_signatures(first, second).combined_score)
+
+    if genuine and impostor:
+        threshold = mean(impostor) + margin * (mean(genuine) - mean(impostor))
+    elif genuine:
+        threshold = max(0.0, mean(genuine) - 2 * pstdev(genuine))
+    else:
+        threshold = 0.5
+
+    return Calibration(
+        genuine_scores=genuine,
+        impostor_scores=impostor,
+        threshold=round(float(threshold), 3),
+    )
+
 
 
