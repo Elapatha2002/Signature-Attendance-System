@@ -190,3 +190,74 @@ def _soften(mask: np.ndarray) -> np.ndarray:
     return cv2.GaussianBlur(thick, (11, 11), 3.5)
 
 
+# ------------------------------------------------------------------ measures
+
+
+def _ncc_similarity(first: np.ndarray, second: np.ndarray) -> float:
+    """Normalised cross-correlation that tolerates a small residual translation.
+
+    The centre of one image is slid over the other and the best correlation is
+    kept, so a signature written a few pixels higher in the cell is not
+    penalised for its position. Both directions are evaluated so that the
+    measure is symmetric.
+    """
+    if not first.any() or not second.any():
+        return 0.0
+
+    def best_response(haystack: np.ndarray, needle: np.ndarray) -> float:
+        inner = needle[SHIFT_TOLERANCE:-SHIFT_TOLERANCE, SHIFT_TOLERANCE:-SHIFT_TOLERANCE]
+        if inner.size == 0:
+            return 0.0
+        response = cv2.matchTemplate(
+            haystack.astype(np.float32), inner.astype(np.float32), cv2.TM_CCOEFF_NORMED
+        )
+        return float(response.max())
+
+    return max(0.0, best_response(first, second), best_response(second, first))
+
+
+def _iou_similarity(first: np.ndarray, second: np.ndarray) -> float:
+    """Intersection over union of the two softened ink areas."""
+    first_ink = first > 10
+    second_ink = second > 10
+    union = int(np.logical_or(first_ink, second_ink).sum())
+    if union == 0:
+        return 0.0
+    return float(np.logical_and(first_ink, second_ink).sum() / union)
+
+
+def _profile_similarity(first: np.ndarray, second: np.ndarray) -> float:
+    """Correlate the horizontal and vertical ink projection profiles."""
+    if not first.any() or not second.any():
+        return 0.0
+
+    def correlate(a: np.ndarray, b: np.ndarray) -> float:
+        a = a.astype(np.float64)
+        b = b.astype(np.float64)
+        a -= a.mean()
+        b -= b.mean()
+        denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+        return float(np.dot(a, b) / denominator) if denominator else 0.0
+
+    vertical = correlate(first.sum(axis=0), second.sum(axis=0))
+    horizontal = correlate(first.sum(axis=1), second.sum(axis=1))
+    return float(np.clip((vertical + horizontal) / 2.0, 0.0, 1.0))
+
+
+def _orb_similarity(first: np.ndarray, second: np.ndarray) -> float:
+    """Fraction of ORB descriptors that find a close mutual match."""
+    orb = cv2.ORB_create(nfeatures=500, fastThreshold=5)
+    _, first_descriptors = orb.detectAndCompute(first, None)
+    _, second_descriptors = orb.detectAndCompute(second, None)
+    if first_descriptors is None or second_descriptors is None:
+        return 0.0
+    matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = matcher.match(first_descriptors, second_descriptors)
+    if not matches:
+        return 0.0
+    good_matches = [match for match in matches if match.distance <= 55]
+    smaller_set = min(len(first_descriptors), len(second_descriptors))
+    return min(1.0, len(good_matches) / max(8, smaller_set))
+
+
+
