@@ -109,4 +109,84 @@ class Calibration:
     def impostor_rejected(self) -> int:
         return sum(score < self.threshold for score in self.impostor_scores)
 
+# --------------------------------------------------------------- preparation
+
+
+def _fallback_ssim(first: np.ndarray, second: np.ndarray) -> float:
+    """SSIM following Wang et al. (2004), used when scikit-image is absent."""
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    a = first.astype(np.float64)
+    b = second.astype(np.float64)
+    kernel = (11, 11)
+    sigma = 1.5
+    mu_a = cv2.GaussianBlur(a, kernel, sigma)
+    mu_b = cv2.GaussianBlur(b, kernel, sigma)
+    mu_a2, mu_b2, mu_ab = mu_a * mu_a, mu_b * mu_b, mu_a * mu_b
+    sigma_a2 = cv2.GaussianBlur(a * a, kernel, sigma) - mu_a2
+    sigma_b2 = cv2.GaussianBlur(b * b, kernel, sigma) - mu_b2
+    sigma_ab = cv2.GaussianBlur(a * b, kernel, sigma) - mu_ab
+    ssim_map = ((2 * mu_ab + c1) * (2 * sigma_ab + c2)) / (
+        (mu_a2 + mu_b2 + c1) * (sigma_a2 + sigma_b2 + c2)
+    )
+    return float(ssim_map.mean())
+
+
+def _ssim(first: np.ndarray, second: np.ndarray) -> float:
+    if HAS_SCIKIT_IMAGE:
+        return float(_skimage_ssim(first, second, data_range=255))
+    return _fallback_ssim(first, second)
+
+
+def normalize_signature(image_path: str | Path, size: tuple[int, int] = CANVAS) -> np.ndarray:
+    """Crop a signature mask to its ink, rescale it and centre it on a fixed canvas.
+
+    Normalisation removes the differences in cell position and signature size
+    that would otherwise dominate every similarity measure.
+    """
+    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise FileNotFoundError(f"Signature image not found: {image_path}")
+    _, binary = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Discard specks so that a single noise pixel cannot define the crop box.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    if count > 1:
+        largest = max(stats[1:, cv2.CC_STAT_AREA])
+        keep = np.zeros_like(binary)
+        for component in range(1, count):
+            if stats[component, cv2.CC_STAT_AREA] >= max(4, 0.02 * largest):
+                keep[labels == component] = 255
+        binary = keep
+
+    canvas = np.zeros((size[1], size[0]), dtype=np.uint8)
+    points = cv2.findNonZero(binary)
+    if points is None:
+        return canvas
+
+    x, y, width, height = cv2.boundingRect(points)
+    cropped = binary[y : y + height, x : x + width]
+    available_width = size[0] - 24
+    available_height = size[1] - 24
+    scale = min(available_width / max(width, 1), available_height / max(height, 1))
+    resized = cv2.resize(
+        cropped,
+        (max(1, int(width * scale)), max(1, int(height * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
+    start_x = (size[0] - resized.shape[1]) // 2
+    start_y = (size[1] - resized.shape[0]) // 2
+    canvas[start_y : start_y + resized.shape[0], start_x : start_x + resized.shape[1]] = resized
+    return canvas
+
+
+def _soften(mask: np.ndarray) -> np.ndarray:
+    """Thicken and blur strokes so small pen-path differences do not zero the overlap.
+
+    Two genuine signatures almost never place identical pixels on top of each
+    other. Comparing hard one-pixel strokes therefore measures registration
+    error, not similarity.
+    """
+    thick = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    return cv2.GaussianBlur(thick, (11, 11), 3.5)
+
 
