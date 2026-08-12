@@ -1,0 +1,5 @@
+opencv-python>=4.8
+numpy>=1.24
+matplotlib>=3.7
+scikit-image>=0.22
+pytest>=7.0
