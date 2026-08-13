@@ -240,3 +240,7 @@ class AttendanceImageProcessor:
                 ],
                 dtype=np.float32,
             )
+    #==================== 20: Student table perspective correction=====================
+            matrix = cv2.getPerspectiveTransform(quadrilateral, destination)
+            warped = cv2.warpPerspective(image, matrix, (self.table_width, table_height))
+            return warped, horizontal, vertical, quadrilateral
