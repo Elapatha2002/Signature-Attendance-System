@@ -477,6 +477,58 @@ class AttendanceImageProcessor:
                 cleaned[labels == component] = 255
         return cleaned
 
+    @staticmethod
+    def _colour_mask(roi: np.ndarray) -> np.ndarray:
+        """Mask the saturated, non-white pixels produced by a coloured pen."""
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        saturation = hsv[:, :, 1]
+        value = hsv[:, :, 2]
+        return np.where((saturation > 45) & (value < 245), 255, 0).astype(np.uint8)
+
+    def is_absence_annotation(
+        self,
+        mask: np.ndarray,
+        max_overlap: float = 0.35,
+        level_tolerance: float = 0.30,
+    ) -> bool:
+        """True when the cell holds a struck-out absence mark rather than a signature.
+
+        Staff record a known absence by writing a short token such as ``ab`` and
+        striking a rule through it on both sides, so the cell contains ink and
+        the ink-ratio rule of :meth:`_classify` would call it present.
+
+        The mark is recognised by its geometry rather than by reading it. A
+        strike stroke is a component that is long and thin, and in a struck-out
+        mark it sits *beside* the written token at the same height. That is what
+        separates it from a signature that happens to be underlined, where the
+        rule sits *below* the writing and therefore overlaps it horizontally.
+        """
+        height, width = mask.shape
+        # Compression and rescaling break a thin strike stroke into fragments,
+        # none of which is long enough to be recognised. Bridging the gaps first
+        # removed the one false positive this rule produced across the
+        # degradation suite, at no cost to the number it detects.
+        bridged = cv2.dilate(
+            mask, cv2.getStructuringElement(cv2.MORPH_RECT, (STRIKE_BRIDGE, 1))
+        )
+        count, _, statistics, _ = cv2.connectedComponentsWithStats(bridged)
+
+        strikes: list[int] = []
+        token: list[int] = []
+        for component in range(1, count):
+            component_width = statistics[component, cv2.CC_STAT_WIDTH]
+            component_height = statistics[component, cv2.CC_STAT_HEIGHT]
+            long_and_thin = (
+                component_width >= self.course.strike_min_width * width
+                and component_height <= self.course.strike_max_height * height
+            )
+            (strikes if long_and_thin else token).append(component)
+
+        if not strikes or not token:
+            return False
+
+        
+
     
 
 
