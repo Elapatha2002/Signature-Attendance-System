@@ -451,4 +451,33 @@ class AttendanceImageProcessor:
         left = int(round(width * self.course.signature_column_start))
         return (left, width - 1), False
 
+    # --------------------------------------------------------- ink extraction
+
+    @staticmethod
+    def _remove_grid_lines(binary_roi: np.ndarray) -> np.ndarray:
+        """Delete printed rules and speckle noise, leaving only handwriting."""
+        horizontal_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (max(15, binary_roi.shape[1] // 3), 1)
+        )
+        vertical_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (1, max(10, binary_roi.shape[0] // 2))
+        )
+        horizontal = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN, horizontal_kernel)
+        vertical = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN, vertical_kernel)
+        lines = cv2.bitwise_or(horizontal, vertical)
+        residual = cv2.bitwise_and(binary_roi, cv2.bitwise_not(lines))
+
+        component_count, labels, statistics, _ = cv2.connectedComponentsWithStats(residual)
+        cleaned = np.zeros_like(residual)
+        for component in range(1, component_count):
+            area = statistics[component, cv2.CC_STAT_AREA]
+            component_width = statistics[component, cv2.CC_STAT_WIDTH]
+            component_height = statistics[component, cv2.CC_STAT_HEIGHT]
+            if area >= 6 and (component_width >= 3 or component_height >= 3):
+                cleaned[labels == component] = 255
+        return cleaned
+
+    
+
+
         
