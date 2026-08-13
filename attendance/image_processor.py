@@ -267,7 +267,8 @@ class AttendanceImageProcessor:
                     self.max_table_height,
                 )
             )
-        # --------------------------------------------------------- grid detection
+        # grid detection
+        # 1. Separator Position Detection 
 
     @staticmethod
     def _separator_positions(line_mask: np.ndarray, axis: int) -> list[int]:
@@ -276,47 +277,74 @@ class AttendanceImageProcessor:
         ``axis=0`` projects onto the rows and therefore returns the y positions of
         horizontal separators; ``axis=1`` returns the x positions of vertical ones.
         """
+
+        # Calculate how much of each row or column contains a detected line.
         profile = line_mask.sum(axis=1 if axis == 0 else 0) / 255.0
+
+        # Get the total length of the row or column.
         span = line_mask.shape[1] if axis == 0 else line_mask.shape[0]
+
+        # Mark positions where enough of the line is filled.
         filled = profile > SEPARATOR_FILL_RATIO * span
 
         positions: list[int] = []
         current_run: list[int] = []
+
+        # Group consecutive filled pixels into one separator.
         for index, is_filled in enumerate(filled):
             if is_filled:
                 current_run.append(index)
             elif current_run:
+                # Calculate the centre of the detected separator.
                 positions.append(int(round(float(np.mean(current_run)))))
                 current_run = []
+        # Handle a separator that continues until the end.        
         if current_run:
             positions.append(int(round(float(np.mean(current_run)))))
         return positions
+
+    #  2. Grid Detection 
 
     def _detect_grid(
         self, warped_binary: np.ndarray
     ) -> tuple[list[int], list[int], np.ndarray, np.ndarray]:
         """Detect the horizontal and vertical separators of the corrected table."""
+
+        # Get the height and width of the table image.
         height, width = warped_binary.shape
+
+        # Extract horizontal table lines using morphological opening.
         horizontal = cv2.morphologyEx(
             warped_binary,
             cv2.MORPH_OPEN,
             cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, width // 3), 1)),
         )
+
+        # Extract vertical table lines.
         vertical = cv2.morphologyEx(
             warped_binary,
             cv2.MORPH_OPEN,
             cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, height // 4))),
         )
-        # Bridge the gaps a slightly skewed separator leaves in the projection.
+
+        # Connect small gaps in horizontal lines.
         horizontal = cv2.dilate(
             horizontal, cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, width // 6), 1))
         )
+
+        # Connect small gaps in vertical lines.
         vertical = cv2.dilate(
             vertical, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, height // 6)))
         )
+
+        # Find the y-coordinates of horizontal separators.
         rows = self._separator_positions(horizontal, axis=0)
+
+        # Find the x-coordinates of vertical separators.
         columns = self._separator_positions(vertical, axis=1)
         return rows, columns, horizontal, vertical
+
+    # ========================== 3. Student Row Detection ==========================
 
     def _row_bounds(self, separators: list[int], height: int) -> tuple[list[tuple[int, int]], bool]:
         """Return the (top, bottom) pixel bounds of each student row.
@@ -333,15 +361,27 @@ class AttendanceImageProcessor:
         Only if no such window exists does the method fall back to an equal
         split, which drifts because the header row is shorter than the data rows.
         """
+        # Number of students in the attendance sheet.
         row_count = len(self.course.students)
+
+        # One header row + student rows require this number of separators.
         window_size = row_count + 2
 
         best_window: list[int] | None = None
         best_score = float("inf")
+
+        # Check different groups of separators to find the
+        # most uniform student-row spacing.
         for start in range(0, len(separators) - window_size + 1):
+
+            # Select a possible table section.
             window = separators[start : start + window_size]
+
+            # Calculate the distance between neighbouring separators.
             gaps = [second - first for first, second in zip(window, window[1:])]
             header_gap, data_gaps = gaps[0], gaps[1:]
+
+            # Ignore invalid row sizes.
             if min(data_gaps) <= 0:
                 continue
 
@@ -374,6 +414,8 @@ class AttendanceImageProcessor:
             ],
             False,
         )
+
+    #  4. Recover Missing Row Lines 
 
     @staticmethod
     def _fit_row_pitch(
@@ -437,10 +479,15 @@ class AttendanceImageProcessor:
             for i in range(row_count)
         ]
 
+    #  5. Signature Column Detection 
+
     def _signature_column(
         self, separators: list[int], width: int
     ) -> tuple[tuple[int, int], bool]:
         """Return the (left, right) pixel bounds of the signature column."""
+
+    # If enough vertical separators are detected,
+    # use the last two separators as the signature column.
         if len(separators) >= 2:
             left, right = separators[-2], separators[-1]
             wide_enough = (right - left) > 0.08 * width
@@ -451,7 +498,7 @@ class AttendanceImageProcessor:
         left = int(round(width * self.course.signature_column_start))
         return (left, width - 1), False
 
-    # --------------------------------------------------------- ink extraction
+    #  6. Remove Table Grid Lines 
 
     @staticmethod
     def _remove_grid_lines(binary_roi: np.ndarray) -> np.ndarray:
@@ -459,6 +506,8 @@ class AttendanceImageProcessor:
         horizontal_kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT, (max(15, binary_roi.shape[1] // 3), 1)
         )
+
+        # Create a vertical kernel for detecting vertical lines.
         vertical_kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT, (1, max(10, binary_roi.shape[0] // 2))
         )
@@ -477,6 +526,7 @@ class AttendanceImageProcessor:
                 cleaned[labels == component] = 255
         return cleaned
 
+    # 7. Detect Coloured Pen Marks
     @staticmethod
     def _colour_mask(roi: np.ndarray) -> np.ndarray:
         """Mask the saturated, non-white pixels produced by a coloured pen."""
@@ -485,6 +535,7 @@ class AttendanceImageProcessor:
         value = hsv[:, :, 2]
         return np.where((saturation > 45) & (value < 245), 255, 0).astype(np.uint8)
 
+    # 8. Detect Absence Annotation
     def is_absence_annotation(
         self,
         mask: np.ndarray,
@@ -551,6 +602,8 @@ class AttendanceImageProcessor:
             if beside and same_level:
                 return True
         return False
+
+    # 9. Final Attendance Classification
 
     def _classify(self, colour_ratio: float, residual_ratio: float) -> tuple[bool, float]:
         """Apply the dual-evidence decision rule and derive a confidence value."""
