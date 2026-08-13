@@ -1,0 +1,143 @@
+CS402.3 Student Attendance Management System - Test Results
+===========================================================
+
+1. Automated test suite
+-----------------------
+Command: pytest -q
+Result : 53 passed
+
+    tests/test_regression.py   Ground-truth regression over all five sheets,
+                               grid measurement, row ordering, decision margin,
+                               written absence marks, mask quality and the
+                               saved stage images.
+    tests/test_units.py        XML loading and validation, database round trip,
+                               upsert and date-ordering guards, classifier rule,
+                               absence-mark geometry, corner ordering, grid
+                               window selection and pitch fitting, skew
+                               estimation, contrast normalisation, error paths,
+                               signature-matcher behaviour, leave-one-out
+                               consistency and suspicion scoring.
+
+2. Classification on the five supplied sheets
+---------------------------------------------
+Command: python run_all.py --reset
+
+    Session                    10000409  10009301  10009302  10009303  10009304  10009306  Present
+    sheet1.jpeg 31/05/2019            P         P         P         P         P         P     6/6
+    sheet2.jpeg 21/06/2019            P         P         P         P         P         A     5/6
+    sheet3.jpeg 28/06/2019            P         A         A         P         P         P     4/6
+    sheet4.jpeg 05/07/2019            P         A         P         A         P         P     4/6
+    sheet5.jpeg 12/07/2019            P         P         P         P         P         P     6/6
+    Present per student               5         3         4         4         5         4    25/30
+
+    Signature cells evaluated              : 30
+    Signed cells (present)                 : 25
+    Blank cells (absent)                   : 4
+    Written absence marks (absent)         : 1
+    Disagreements with the manual labels   : 0
+    Overall attendance rate                : 83.3%
+    Sheets whose printed grid was measured : 5/5
+
+3. Written absence marks
+------------------------
+On sheet 2 the absence of student 10009306 was recorded by writing a struck-out
+"-ab-" mark into the signature cell rather than by leaving it empty. The cell
+therefore contains as much ink as a signature:
+
+    colour ratio 0.1127, dark-ink ratio 0.0957  ->  9.39x the threshold
+
+An ink-ratio rule alone would call that cell present. It is classified absent by
+the strike-through rule instead: a long thin stroke sitting beside the written
+token at the same height, which is what distinguishes a struck-out mark from an
+underlined signature.
+
+    Detected written absence marks : 1 of 1
+    False positives on the other 29 cells : 0
+
+4. Decision margin
+------------------
+For the 29 cells decided by ink ratio:
+
+    Strongest blank cell : 0.65x the threshold
+    Weakest signed cell  : 3.71x the threshold
+
+The two groups are separated by a factor of about 5.7, so no ink-ratio decision
+on this dataset depends on a marginal value.
+
+5. Robustness to image degradation
+----------------------------------
+Command: python robustness.py
+
+    Condition                Cells correct   Accuracy   Failure
+    None (baseline)                  30/30     100.0%   -
+    JPEG re-encode q95               29/30      96.7%   absence mark missed
+    Rotation -10 deg                 30/30     100.0%   -
+    Rotation -5 deg                  30/30     100.0%   -
+    Rotation +5 deg                  30/30     100.0%   -
+    Rotation +10 deg                 30/30     100.0%   -
+    Perspective tilt 8%              30/30     100.0%   -
+    Perspective tilt 15%             29/30      96.7%   absence mark missed
+    Downscale to 50%                 30/30     100.0%   -
+    Downscale to 30%                 29/30      96.7%   absence mark missed
+    Downscale to 20%                 29/30      96.7%   absence mark missed
+    Gaussian blur 7 px               29/30      96.7%   absence mark missed
+    Gaussian blur 15 px              29/30      96.7%   blank cell read as signed
+    Over-exposure +30%               30/30     100.0%   -
+    Under-exposure -35%              29/30      96.7%   absence mark missed
+    Sensor noise sigma 15            30/30     100.0%   -
+    JPEG quality 30                  30/30     100.0%   -
+    JPEG quality 10                  29/30      96.7%   absence mark missed
+
+Ten of the eighteen conditions leave every cell correct. Seven of the eight
+failures are the same cell: the written absence mark, whose thin strike stroke
+fragments once the image is degraded. The signature and blank-cell decisions
+themselves fail only once, under a 15 px blur.
+
+Across the whole degradation suite the absence-mark rule recalled 10 of the 17
+marks it was shown and produced no false positives on the other 478 cells.
+
+6. Class signature audit sheet
+------------------------------
+Command: python audit_sheet.py
+
+One grid covering the whole class: a row per student, a column per lecture, and
+in each cell the extracted signature with a verdict. Each signature is compared
+with the same student's other signatures, the median score is kept, and that
+median is read against the genuine and impostor distributions to give the
+posterior probability that the sample resembles a different writer.
+
+    Cells judged                             : 25 signed, 5 absent
+    Flagged for review (borderline or above) : 12 of 30
+    Students with every sample flagged       : 2
+
+The last number matters most. When every sample of one student is flagged, nothing
+can be said about which signature is the odd one, because the reference set
+itself is inconsistent. On this dataset that happens for 10009304 and 10009306,
+whose signatures overrun the cell and are clipped differently on each sheet, so
+the sheet labels those rows "check the capture, not the student".
+
+7. Signature comparison (optional feature)
+------------------------------------------
+Command: python investigate.py 10000409
+
+    Genuine pairs (same student)       :  41   mean score 0.51
+    Impostor pairs (different student) : 259   mean score 0.32
+    ROC area under curve               : 0.82
+    Calibrated threshold               : 0.42
+    Genuine pairs accepted             : 31/41
+    Impostor pairs rejected            : 187/259
+
+Important limitations
+---------------------
+The 100% baseline result applies to the five supplied signing sheets only. It is
+not a claim of general accuracy on unseen layouts, classes of a different size
+or other cameras.
+
+The written-absence-mark rule is calibrated on a single example, because the
+dataset contains exactly one such mark. It is correct on the supplied sheets and
+never fired on a genuine signature, but its recall falls under degradation and
+it should not be relied on until more samples are available.
+
+An ROC area of 0.82 means the signature measure is only weakly discriminative.
+It is reported as a review prompt and must never be treated as proof of identity
+or of forgery.
