@@ -212,5 +212,12 @@ class AttendanceImageProcessor:
                 plausible_shape = 1.5 < aspect_ratio < 8.0
                 if wide_enough and tall_enough and not_the_whole_page and plausible_shape:
                     candidates.append(contour)
+
+      #==================== 16: Handle missing student table=====================
+            if not candidates:
+                raise TableDetectionError(
+                    "The student table could not be detected. Use a clear photograph "
+                    "that shows the complete table including its outer border."
+                )
     
     
