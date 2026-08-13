@@ -1,0 +1,180 @@
+[
+  {
+    "condition": "None (baseline)",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "JPEG re-encode q95",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Rotation -10 deg",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Rotation -5 deg",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Rotation +5 deg",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Rotation +10 deg",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Perspective tilt 8%",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Perspective tilt 15%",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Downscale to 50%",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Downscale to 30%",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Downscale to 20%",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Gaussian blur 7 px",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Gaussian blur 15 px",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet3.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Over-exposure +30%",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "Under-exposure -35%",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  },
+  {
+    "condition": "Sensor noise sigma 15",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "JPEG quality 30",
+    "cells_correct": 30,
+    "cells_total": 30,
+    "accuracy": 100.0,
+    "sheets_exact": 5,
+    "sheets_total": 5,
+    "failures": []
+  },
+  {
+    "condition": "JPEG quality 10",
+    "cells_correct": 29,
+    "cells_total": 30,
+    "accuracy": 96.7,
+    "sheets_exact": 4,
+    "sheets_total": 5,
+    "failures": [
+      "sheet2.jpeg misread"
+    ]
+  }
+]
