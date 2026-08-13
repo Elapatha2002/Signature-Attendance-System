@@ -182,4 +182,9 @@ class AttendanceImageProcessor:
             vertical_kernel = cv2.getStructuringElement(
                 cv2.MORPH_RECT, (1, max(25, height // 60))
             )
+    #==================== 12: Extract horizontal and vertical table lines=====================
+            horizontal = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel)
+            vertical = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
+            grid = cv2.bitwise_or(horizontal, vertical)
+    
     
