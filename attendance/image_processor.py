@@ -552,6 +552,19 @@ class AttendanceImageProcessor:
                 return True
         return False
 
+    def _classify(self, colour_ratio: float, residual_ratio: float) -> tuple[bool, float]:
+        """Apply the dual-evidence decision rule and derive a confidence value."""
+        colour_evidence = colour_ratio / self.course.color_ratio_threshold
+        residual_evidence = residual_ratio / self.course.residual_ratio_threshold
+        evidence = max(colour_evidence, residual_evidence)
+        present = evidence >= 1.0
+
+        if present:
+            confidence = 0.55 + 0.20 * min(evidence, 2.2)
+        else:
+            confidence = 0.95 - 0.30 * evidence
+        return present, float(np.clip(confidence, 0.55, 0.99))
+
         
 
     
