@@ -257,3 +257,13 @@ class AttendanceImageProcessor:
                 np.linalg.norm(bottom_left - top_left),
                 np.linalg.norm(bottom_right - top_right),
             )
+
+    #==================== 22: Constrain corrected table height=====================
+            ratio = float(source_height) / max(float(source_width), 1.0)
+            return int(
+                np.clip(
+                    round(self.table_width * ratio),
+                    self.min_table_height,
+                    self.max_table_height,
+                )
+            )
