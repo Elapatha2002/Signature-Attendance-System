@@ -53,3 +53,20 @@ class AttendanceImageProcessor:
         self.table_width = table_width
         self.min_table_height = min_table_height
         self.max_table_height = max_table_height
+
+# ================= Main Utility functions =========================
+        @staticmethod
+            def _order_points(points: np.ndarray) -> np.ndarray:
+                """Return the four corners ordered top-left, top-right, bottom-right, bottom-left."""
+                points = np.asarray(points, dtype=np.float32)
+                sums = points.sum(axis=1)
+                differences = np.diff(points, axis=1).ravel()
+                return np.array(
+                    [
+                        points[np.argmin(sums)],
+                        points[np.argmin(differences)],
+                        points[np.argmax(sums)],
+                        points[np.argmax(differences)],
+                    ],
+                    dtype=np.float32,
+                )
