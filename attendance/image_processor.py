@@ -93,3 +93,18 @@ class AttendanceImageProcessor:
             """
             clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
             return clahe.apply(greyscale)
+
+     #==================== 8: Adaptive binarization=====================
+        @classmethod
+        def _binarize(cls, image: np.ndarray) -> np.ndarray:
+            """Adaptive binarisation that keeps dark ink and printed lines as white."""
+            greyscale = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            return cv2.adaptiveThreshold(
+                cv2.bitwise_not(cls.normalize_contrast(greyscale)),
+                255,
+                cv2.ADAPTIVE_THRESH_MEAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                -10,
+            )
+    
