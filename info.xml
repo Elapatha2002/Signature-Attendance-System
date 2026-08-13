@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<attendanceSystem>
+    <subject>
+        <code>CS402.3</code>
+        <title>Computer Graphics and Visualization</title>
+        <lecturer>Dr. Rasika Ranaweera</lecturer>
+    </subject>
+    <students>
+        <student index="10000409" title="Ms">M S Dilshanika Perera</student>
+        <student index="10009301" title="Mr">C W M A Shehan Abeyrathne</student>
+        <student index="10009302" title="Mr">B A K M Chithrananda</student>
+        <student index="10009303" title="Ms">W Shashini Minosha De Silva</student>
+        <student index="10009304" title="Mr">K L Udara Maduranga Liyanage</student>
+        <student index="10009306" title="Mr">Hansa Anuradha Wickramanayake</student>
+    </students>
+    <sessions>
+        <session image="sheet1.jpeg" date="31/05/2019" />
+        <session image="sheet2.jpeg" date="21/06/2019" />
+        <session image="sheet3.jpeg" date="28/06/2019" />
+        <session image="sheet4.jpeg" date="05/07/2019" />
+        <session image="sheet5.jpeg" date="12/07/2019" />
+    </sessions>
+
+    <processing
+            signatureColumnStart="0.79"
+            colorRatioThreshold="0.012"
+            residualRatioThreshold="0.020"
+            strikeMinWidth="0.22"
+            strikeMaxHeight="0.22" />
+</attendanceSystem>
