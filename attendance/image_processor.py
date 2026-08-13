@@ -80,3 +80,16 @@ class AttendanceImageProcessor:
             path.parent.mkdir(parents=True, exist_ok=True)
             if not cv2.imwrite(str(path), image):
                 raise OSError(f"Could not write image: {path}")
+
+    #==================== 7: Contrast normalization=====================
+        @staticmethod
+        def normalize_contrast(greyscale: np.ndarray) -> np.ndarray:
+            """Equalise local contrast so that exposure no longer changes the result.
+    
+            Contrast Limited Adaptive Histogram Equalisation redistributes intensity
+            inside small tiles. Without it the fixed offset used by the adaptive
+            threshold below silently stops finding the printed rules on an
+            under-exposed photograph, and the table can no longer be detected.
+            """
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            return clahe.apply(greyscale)
