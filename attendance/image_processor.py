@@ -219,5 +219,9 @@ class AttendanceImageProcessor:
                     "The student table could not be detected. Use a clear photograph "
                     "that shows the complete table including its outer border."
                 )
+    #==================== 17: Select student table contour=====================
+            contour = max(candidates, key=cv2.contourArea)
+            perimeter = cv2.arcLength(contour, True)
+            polygon = cv2.approxPolyDP(contour, 0.02 * perimeter, True).reshape(-1, 2)
     
     
