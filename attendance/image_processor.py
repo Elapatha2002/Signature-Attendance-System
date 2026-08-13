@@ -73,3 +73,10 @@ class AttendanceImageProcessor:
             ],
             dtype=np.float32,
         )
+
+    #======================6. Image saving========================
+        @staticmethod
+        def _save(path: Path, image: np.ndarray) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not cv2.imwrite(str(path), image):
+                raise OSError(f"Could not write image: {path}")
