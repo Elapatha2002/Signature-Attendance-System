@@ -168,4 +168,18 @@ class AttendanceImageProcessor:
                 flags=cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_REPLICATE,
             )
+
+    #==================== 11: Morphological kernels=====================
+    
+        def _find_student_table(
+            self, image: np.ndarray, binary: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            """Locate the student table and remove rotation and perspective distortion."""
+            height, width = binary.shape
+            horizontal_kernel = cv2.getStructuringElement(
+                cv2.MORPH_RECT, (max(25, width // 35), 1)
+            )
+            vertical_kernel = cv2.getStructuringElement(
+                cv2.MORPH_RECT, (1, max(25, height // 60))
+            )
     
