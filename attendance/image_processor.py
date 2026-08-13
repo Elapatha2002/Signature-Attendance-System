@@ -144,3 +144,28 @@ class AttendanceImageProcessor:
             if len(angles) < 3:
                 return 0.0
             return float(np.median(angles))
+
+    #==================== 10: Image rotation=====================
+        @staticmethod
+        def rotate_upright(image: np.ndarray, angle: float) -> np.ndarray:
+            """Rotate ``image`` by ``-angle`` degrees, growing the canvas to fit."""
+            height, width = image.shape[:2]
+            centre = (width / 2.0, height / 2.0)
+            matrix = cv2.getRotationMatrix2D(centre, angle, 1.0)
+            cosine, sine = abs(matrix[0, 0]), abs(matrix[0, 1])
+            new_width = int(height * sine + width * cosine)
+            new_height = int(height * cosine + width * sine)
+            matrix[0, 2] += new_width / 2.0 - centre[0]
+            matrix[1, 2] += new_height / 2.0 - centre[1]
+            # The corners exposed by the rotation are filled by replicating the edge
+            # rather than with a constant colour. A constant fill introduces a hard
+            # page-sized rectangle that the line morphology then mistakes for a table
+            # border and merges with the real grid.
+            return cv2.warpAffine(
+                image,
+                matrix,
+                (new_width, new_height),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+    
