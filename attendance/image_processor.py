@@ -244,3 +244,16 @@ class AttendanceImageProcessor:
             matrix = cv2.getPerspectiveTransform(quadrilateral, destination)
             warped = cv2.warpPerspective(image, matrix, (self.table_width, table_height))
             return warped, horizontal, vertical, quadrilateral
+
+    #==================== 21: Calculate table physical aspect ratio=====================
+        def _destination_height(self, quadrilateral: np.ndarray) -> int:
+            """Choose a warp height that preserves the physical aspect ratio of the table."""
+            top_left, top_right, bottom_right, bottom_left = quadrilateral
+            source_width = max(
+                np.linalg.norm(top_right - top_left),
+                np.linalg.norm(bottom_right - bottom_left),
+            )
+            source_height = max(
+                np.linalg.norm(bottom_left - top_left),
+                np.linalg.norm(bottom_right - top_right),
+            )
