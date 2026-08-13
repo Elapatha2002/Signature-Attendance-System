@@ -527,6 +527,31 @@ class AttendanceImageProcessor:
         if not strikes or not token:
             return False
 
+        written = max(token, key=lambda c: statistics[c, cv2.CC_STAT_AREA])
+        token_left = statistics[written, cv2.CC_STAT_LEFT]
+        token_width = statistics[written, cv2.CC_STAT_WIDTH]
+        token_centre = statistics[written, cv2.CC_STAT_TOP] + statistics[
+            written, cv2.CC_STAT_HEIGHT
+        ] / 2
+
+        for strike in strikes:
+            strike_left = statistics[strike, cv2.CC_STAT_LEFT]
+            strike_width = statistics[strike, cv2.CC_STAT_WIDTH]
+            strike_centre = statistics[strike, cv2.CC_STAT_TOP] + statistics[
+                strike, cv2.CC_STAT_HEIGHT
+            ] / 2
+
+            shared = max(
+                0,
+                min(token_left + token_width, strike_left + strike_width)
+                - max(token_left, strike_left),
+            )
+            beside = shared / max(min(token_width, strike_width), 1) <= max_overlap
+            same_level = abs(strike_centre - token_centre) <= level_tolerance * height
+            if beside and same_level:
+                return True
+        return False
+
         
 
     
