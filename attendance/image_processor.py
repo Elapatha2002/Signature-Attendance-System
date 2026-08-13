@@ -228,3 +228,15 @@ class AttendanceImageProcessor:
             if len(polygon) != 4:
                 polygon = cv2.boxPoints(cv2.minAreaRect(contour))
             quadrilateral = self._order_points(polygon)
+
+     #==================== 19: Calculate perspective correction dimensions=====================
+            table_height = self._destination_height(quadrilateral)
+            destination = np.array(
+                [
+                    [0, 0],
+                    [self.table_width - 1, 0],
+                    [self.table_width - 1, table_height - 1],
+                    [0, table_height - 1],
+                ],
+                dtype=np.float32,
+            )
