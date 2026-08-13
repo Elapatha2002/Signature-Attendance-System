@@ -784,6 +784,39 @@ def process(
             table_size=(width, height),
             skew_angle=skew_angle,
         )
+    @staticmethod
+    def _annotate(table: np.ndarray, rows: list[RowDetection]) -> np.ndarray:
+        """Add a status strip to the left of the table instead of drawing over it."""
+        strip_width = 150
+        height = table.shape[0]
+        canvas = np.full((height, table.shape[1] + strip_width, 3), 255, dtype=np.uint8)
+        canvas[:, strip_width:] = table
+
+        for row in rows:
+            status = "PRESENT" if row.present else "ABSENT"
+            colour = (0, 150, 0) if row.present else (0, 0, 210)
+            centre = (row.row_top + row.row_bottom) // 2
+            cv2.putText(
+                canvas,
+                status,
+                (10, centre + 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.62,
+                colour,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                canvas,
+                f"{row.confidence:.0%}",
+                (10, centre + 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (90, 90, 90),
+                1,
+                cv2.LINE_AA,
+            )
+        return canvas
 
         
 
