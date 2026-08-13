@@ -617,6 +617,206 @@ class AttendanceImageProcessor:
         else:
             confidence = 0.95 - 0.30 * evidence
         return present, float(np.clip(confidence, 0.55, 0.99))
+def process(
+        self,
+        image_path: str | Path,
+        session_date: str,
+        output_root: str | Path = "output",
+        progress: ProgressCallback | None = None,
+    ) -> ProcessingResult:
+        """Run the complete pipeline for one signing-sheet photograph."""
+        image_path = Path(image_path)
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image not found: {image_path}")
+
+        output_dir = Path(output_root) / image_path.stem
+        output_dir.mkdir(parents=True, exist_ok=True)
+        notify = progress or (lambda message: None)
+
+        notify("1/9 Loading and resizing image")
+        original = cv2.imread(str(image_path))
+        if original is None:
+            raise ValueError(f"Unsupported or damaged image: {image_path}")
+        scale = self.target_width / original.shape[1]
+        resized = cv2.resize(
+            original, (self.target_width, int(original.shape[0] * scale))
+        )
+        self._save(output_dir / "01_original_resized.jpg", resized)
+
+        notify("2/9 Converting to greyscale")
+        greyscale = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        self._save(output_dir / "02_greyscale.png", greyscale)
+
+        notify("3/9 Applying adaptive binarization")
+        binary = self._binarize(greyscale)
+        self._save(output_dir / "03_binary.png", binary)
+
+        notify("4/9 Estimating and correcting page skew")
+        skew_angle = self.estimate_skew(binary)
+        if abs(skew_angle) >= 0.4:
+            rotated = self.rotate_upright(resized, skew_angle)
+            # Rotation grows the canvas, so rescale to keep every kernel size and
+            # every relative measurement below on the same footing as before.
+            rotation_scale = self.target_width / rotated.shape[1]
+            resized = cv2.resize(
+                rotated,
+                (self.target_width, max(1, int(rotated.shape[0] * rotation_scale))),
+            )
+            binary = self._binarize(resized)
+            self._save(output_dir / "03b_deskewed.jpg", resized)
+            self._save(output_dir / "03c_deskewed_binary.png", binary)
+        notify(f"    estimated skew: {skew_angle:+.2f} degrees")
+
+        notify("5/9 Detecting table lines and correcting perspective")
+        warped, horizontal, vertical, quadrilateral = self._find_student_table(
+            resized, binary
+        )
+        self._save(output_dir / "04_horizontal_lines.png", horizontal)
+        self._save(output_dir / "05_vertical_lines.png", vertical)
+        detected = resized.copy()
+        cv2.polylines(detected, [quadrilateral.astype(np.int32)], True, (0, 200, 0), 5)
+        self._save(output_dir / "06_detected_student_table.jpg", detected)
+        self._save(output_dir / "07_perspective_corrected_table.jpg", warped)
+
+        notify("6/9 Locating the printed row and column separators")
+        warped_binary = self._binarize(warped)
+        height, width = warped_binary.shape
+        row_separators, column_separators, warped_horizontal, _ = self._detect_grid(
+            warped_binary
+        )
+        rows, grid_rows_detected = self._row_bounds(row_separators, height)
+        (column_start, column_end), grid_column_detected = self._signature_column(
+            column_separators, width
+        )
+        grid_detected = grid_rows_detected and grid_column_detected
+
+        grid_preview = warped.copy()
+        for position in row_separators:
+            cv2.line(grid_preview, (0, position), (width, position), (0, 140, 255), 2)
+        for position in column_separators:
+            cv2.line(grid_preview, (position, 0), (position, height), (255, 120, 0), 2)
+        self._save(output_dir / "08_detected_grid.jpg", grid_preview)
+        self._save(output_dir / "09_warped_horizontal_lines.png", warped_horizontal)
+
+        notify("7/9 Extracting student signature cells")
+        margin_x = max(3, int(0.03 * (column_end - column_start)))
+        row_margin = max(2, int(0.10 * (height / (len(self.course.students) + 1))))
+        cell_left = column_start + margin_x
+        cell_right = column_end - margin_x
+
+        row_results: list[RowDetection] = []
+        combined_mask = np.zeros((height, width), dtype=np.uint8)
+        annotated = warped.copy()
+
+        for student, (row_top, row_bottom) in zip(self.course.students, rows):
+            top = row_top + row_margin
+            bottom = row_bottom - row_margin
+            roi = warped[top:bottom, cell_left:cell_right]
+            if roi.size == 0:
+                raise TableDetectionError(
+                    f"The signature cell for {student.index} was empty after table extraction"
+                )
+
+            colour_mask = self._colour_mask(roi)
+            dark_ink = cv2.adaptiveThreshold(
+                cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY),
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV,
+                21,
+                9,
+            )
+            residual_mask = self._remove_grid_lines(dark_ink)
+            merged_mask = cv2.bitwise_or(colour_mask, residual_mask)
+
+            cell_area = float(roi.shape[0] * roi.shape[1])
+            colour_pixels = int(cv2.countNonZero(colour_mask))
+            residual_pixels = int(cv2.countNonZero(residual_mask))
+            colour_ratio = colour_pixels / cell_area
+            residual_ratio = residual_pixels / cell_area
+            present, confidence = self._classify(colour_ratio, residual_ratio)
+            reason = "signature" if present else "blank cell"
+            if present and self.is_absence_annotation(merged_mask):
+                # The cell holds ink, but it is a struck-out absence mark, not a
+                # signature, so the ink-ratio decision has to be overruled.
+                present, confidence, reason = False, 0.95, "absence annotation"
+
+            signature_file = output_dir / "signatures" / f"{student.index}.png"
+            self._save(signature_file, merged_mask)
+            crop_file = output_dir / "signature_crops" / f"{student.index}.png"
+            self._save(crop_file, roi)
+            combined_mask[top:bottom, cell_left:cell_right] = merged_mask
+
+            box_colour = (0, 170, 0) if present else (0, 0, 220)
+            cv2.rectangle(annotated, (cell_left, top), (cell_right, bottom), box_colour, 2)
+
+            row_results.append(
+                RowDetection(
+                    student=student,
+                    present=present,
+                    confidence=confidence,
+                    color_pixels=colour_pixels,
+                    residual_pixels=residual_pixels,
+                    color_ratio=colour_ratio,
+                    residual_ratio=residual_ratio,
+                    signature_path=signature_file,
+                    crop_path=crop_file,
+                    row_top=top,
+                    row_bottom=bottom,
+                    reason=reason,
+                )
+            )
+
+        notify("8/9 Classifying attendance")
+        self._save(output_dir / "10_combined_signature_mask.png", combined_mask)
+        self._save(
+            output_dir / "11_attendance_result.jpg",
+            self._annotate(annotated, row_results),
+        )
+
+        notify("9/9 Processing complete")
+        return ProcessingResult(
+            image_path=image_path,
+            session_date=session_date,
+            output_dir=output_dir,
+            rows=row_results,
+            grid_detected=grid_detected,
+            table_size=(width, height),
+            skew_angle=skew_angle,
+        )
+    @staticmethod
+    def _annotate(table: np.ndarray, rows: list[RowDetection]) -> np.ndarray:
+        """Add a status strip to the left of the table instead of drawing over it."""
+        strip_width = 150
+        height = table.shape[0]
+        canvas = np.full((height, table.shape[1] + strip_width, 3), 255, dtype=np.uint8)
+        canvas[:, strip_width:] = table
+
+        for row in rows:
+            status = "PRESENT" if row.present else "ABSENT"
+            colour = (0, 150, 0) if row.present else (0, 0, 210)
+            centre = (row.row_top + row.row_bottom) // 2
+            cv2.putText(
+                canvas,
+                status,
+                (10, centre + 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.62,
+                colour,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                canvas,
+                f"{row.confidence:.0%}",
+                (10, centre + 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (90, 90, 90),
+                1,
+                cv2.LINE_AA,
+            )
+        return canvas
 
         
 
