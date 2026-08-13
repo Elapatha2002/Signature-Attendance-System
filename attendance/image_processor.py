@@ -186,5 +186,13 @@ class AttendanceImageProcessor:
             horizontal = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel)
             vertical = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
             grid = cv2.bitwise_or(horizontal, vertical)
+
+    #==================== 13: Improve table grid connectivity=====================
+            grid = cv2.morphologyEx(
+                grid,
+                cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+                iterations=2,
+            )
     
     
