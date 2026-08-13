@@ -267,3 +267,360 @@ class AttendanceImageProcessor:
                     self.max_table_height,
                 )
             )
+        # grid detection
+        # 1. Separator Position Detection 
+
+    @staticmethod
+    def _separator_positions(line_mask: np.ndarray, axis: int) -> list[int]:
+        """Return the centre position of every printed separator in ``line_mask``.
+
+        ``axis=0`` projects onto the rows and therefore returns the y positions of
+        horizontal separators; ``axis=1`` returns the x positions of vertical ones.
+        """
+
+        # Calculate how much of each row or column contains a detected line.
+        profile = line_mask.sum(axis=1 if axis == 0 else 0) / 255.0
+
+        # Get the total length of the row or column.
+        span = line_mask.shape[1] if axis == 0 else line_mask.shape[0]
+
+        # Mark positions where enough of the line is filled.
+        filled = profile > SEPARATOR_FILL_RATIO * span
+
+        positions: list[int] = []
+        current_run: list[int] = []
+
+        # Group consecutive filled pixels into one separator.
+        for index, is_filled in enumerate(filled):
+            if is_filled:
+                current_run.append(index)
+            elif current_run:
+                # Calculate the centre of the detected separator.
+                positions.append(int(round(float(np.mean(current_run)))))
+                current_run = []
+        # Handle a separator that continues until the end.        
+        if current_run:
+            positions.append(int(round(float(np.mean(current_run)))))
+        return positions
+
+    #  2. Grid Detection 
+
+    def _detect_grid(
+        self, warped_binary: np.ndarray
+    ) -> tuple[list[int], list[int], np.ndarray, np.ndarray]:
+        """Detect the horizontal and vertical separators of the corrected table."""
+
+        # Get the height and width of the table image.
+        height, width = warped_binary.shape
+
+        # Extract horizontal table lines using morphological opening.
+        horizontal = cv2.morphologyEx(
+            warped_binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, width // 3), 1)),
+        )
+
+        # Extract vertical table lines.
+        vertical = cv2.morphologyEx(
+            warped_binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, height // 4))),
+        )
+
+        # Connect small gaps in horizontal lines.
+        horizontal = cv2.dilate(
+            horizontal, cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, width // 6), 1))
+        )
+
+        # Connect small gaps in vertical lines.
+        vertical = cv2.dilate(
+            vertical, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, height // 6)))
+        )
+
+        # Find the y-coordinates of horizontal separators.
+        rows = self._separator_positions(horizontal, axis=0)
+
+        # Find the x-coordinates of vertical separators.
+        columns = self._separator_positions(vertical, axis=1)
+        return rows, columns, horizontal, vertical
+
+    # ========================== 3. Student Row Detection ==========================
+
+    def _row_bounds(self, separators: list[int], height: int) -> tuple[list[tuple[int, int]], bool]:
+        """Return the (top, bottom) pixel bounds of each student row.
+
+        The sheet has one header row followed by one row per student, so the
+        student table is a run of ``len(students) + 2`` horizontal separators
+        whose data-row gaps are equal. More separators than that are normal: on a
+        tilted photograph the line morphology can merge the small date table
+        above into the same contour, and the corrected image then contains both
+        tables. The correct block is therefore chosen as the candidate window
+        with the most uniform data-row spacing rather than assumed to be the
+        whole image.
+
+        Only if no such window exists does the method fall back to an equal
+        split, which drifts because the header row is shorter than the data rows.
+        """
+        # Number of students in the attendance sheet.
+        row_count = len(self.course.students)
+
+        # One header row + student rows require this number of separators.
+        window_size = row_count + 2
+
+        best_window: list[int] | None = None
+        best_score = float("inf")
+
+        # Check different groups of separators to find the
+        # most uniform student-row spacing.
+        for start in range(0, len(separators) - window_size + 1):
+
+            # Select a possible table section.
+            window = separators[start : start + window_size]
+
+            # Calculate the distance between neighbouring separators.
+            gaps = [second - first for first, second in zip(window, window[1:])]
+            header_gap, data_gaps = gaps[0], gaps[1:]
+
+            # Ignore invalid row sizes.
+            if min(data_gaps) <= 0:
+                continue
+
+            average_gap = sum(data_gaps) / len(data_gaps)
+            # A data row must be a sensible size, and the header row must be
+            # roughly comparable to a data row rather than a whole second table.
+            if average_gap < 8 or not 0.4 <= header_gap / average_gap <= 1.8:
+                continue
+
+            spread = max(data_gaps) - min(data_gaps)
+            score = spread / average_gap
+            if score < best_score - 1e-9:
+                best_score, best_window = score, window
+
+        if best_window is not None:
+            return (
+                [(best_window[i + 1], best_window[i + 2]) for i in range(row_count)],
+                True,
+            )
+
+        fitted = self._fit_row_pitch(separators, height, row_count)
+        if fitted is not None:
+            return fitted, True
+
+        band = height / (row_count + 1)
+        return (
+            [
+                (int(round(band * (index + 1))), int(round(band * (index + 2))))
+                for index in range(row_count)
+            ],
+            False,
+        )
+
+    #  4. Recover Missing Row Lines 
+
+    @staticmethod
+    def _fit_row_pitch(
+        separators: list[int], height: int, row_count: int
+    ) -> list[tuple[int, int]] | None:
+        """Recover the row boundaries when some printed rules are too faint to detect.
+
+        The data rows of a signing sheet are equally spaced, so the boundaries
+        form an arithmetic sequence. When a faint rule is missed the exact-window
+        search above finds nothing, but the sequence can still be recovered from
+        the rules that were seen: the pitch is the median observed gap, and the
+        offset is the anchor whose sequence best explains them.
+
+        The fit is scored against the separators that were *observed*, not
+        against the model points, so a missing rule costs nothing while a rule
+        that contradicts the model does.
+        """
+        if len(separators) < 4:
+            return None
+        gaps = [b - a for a, b in zip(separators, separators[1:]) if b - a > 8]
+        if not gaps:
+            return None
+        pitch = float(np.median(gaps))
+
+                # The table holds one header band and one band per student, so a
+        # plausible pitch is close to height / (students + 1). This rejects a
+        # sequence fitted to unrelated marks.
+        expected_pitch = height / (row_count + 1)
+        if not 0.70 * expected_pitch <= pitch <= 1.35 * expected_pitch:
+            return None
+
+        best_model: list[float] | None = None
+        best_error = float("inf")
+        best_support = 0
+        for anchor in separators:
+            model = [anchor + step * pitch for step in range(row_count + 1)]
+            if model[0] < -2 or model[-1] > height * 1.15:
+                continue
+            observed = [
+                s for s in separators
+                if model[0] - 0.6 * pitch <= s <= model[-1] + 0.6 * pitch
+            ]
+            if len(observed) < 4:
+                continue
+            # A model point counts as supported when a printed rule was actually
+            # seen near it. Requiring several supported points stops a sequence
+            # being fitted through noise.
+            supported = sum(
+                1 for m in model if min(abs(m - s) for s in separators) <= 0.25 * pitch
+            )
+            if supported < 4:
+                continue
+            error = sum(min(abs(m - s) for m in model) for s in observed) / len(observed)
+            if error < best_error or (error == best_error and supported > best_support):
+                best_error, best_model, best_support = error, model, supported
+
+        if best_model is None or best_error >= 0.18 * pitch:
+            return None
+        return [
+            (int(round(best_model[i])), int(round(min(best_model[i + 1], height))))
+            for i in range(row_count)
+        ]
+
+    #  5. Signature Column Detection 
+
+    def _signature_column(
+        self, separators: list[int], width: int
+    ) -> tuple[tuple[int, int], bool]:
+        """Return the (left, right) pixel bounds of the signature column."""
+
+    # If enough vertical separators are detected,
+    # use the last two separators as the signature column.
+        if len(separators) >= 2:
+            left, right = separators[-2], separators[-1]
+            wide_enough = (right - left) > 0.08 * width
+            rightmost = right > 0.9 * width
+            if wide_enough and rightmost:
+                return (left, right), True
+
+        left = int(round(width * self.course.signature_column_start))
+        return (left, width - 1), False
+
+    #  6. Remove Table Grid Lines 
+
+    @staticmethod
+    def _remove_grid_lines(binary_roi: np.ndarray) -> np.ndarray:
+        """Delete printed rules and speckle noise, leaving only handwriting."""
+        horizontal_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (max(15, binary_roi.shape[1] // 3), 1)
+        )
+
+        # Create a vertical kernel for detecting vertical lines.
+        vertical_kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (1, max(10, binary_roi.shape[0] // 2))
+        )
+        horizontal = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN, horizontal_kernel)
+        vertical = cv2.morphologyEx(binary_roi, cv2.MORPH_OPEN, vertical_kernel)
+        lines = cv2.bitwise_or(horizontal, vertical)
+        residual = cv2.bitwise_and(binary_roi, cv2.bitwise_not(lines))
+
+        component_count, labels, statistics, _ = cv2.connectedComponentsWithStats(residual)
+        cleaned = np.zeros_like(residual)
+        for component in range(1, component_count):
+            area = statistics[component, cv2.CC_STAT_AREA]
+            component_width = statistics[component, cv2.CC_STAT_WIDTH]
+            component_height = statistics[component, cv2.CC_STAT_HEIGHT]
+            if area >= 6 and (component_width >= 3 or component_height >= 3):
+                cleaned[labels == component] = 255
+        return cleaned
+
+    # 7. Detect Coloured Pen Marks
+    @staticmethod
+    def _colour_mask(roi: np.ndarray) -> np.ndarray:
+        """Mask the saturated, non-white pixels produced by a coloured pen."""
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        saturation = hsv[:, :, 1]
+        value = hsv[:, :, 2]
+        return np.where((saturation > 45) & (value < 245), 255, 0).astype(np.uint8)
+
+    # 8. Detect Absence Annotation
+    def is_absence_annotation(
+        self,
+        mask: np.ndarray,
+        max_overlap: float = 0.35,
+        level_tolerance: float = 0.30,
+    ) -> bool:
+        """True when the cell holds a struck-out absence mark rather than a signature.
+
+        Staff record a known absence by writing a short token such as ``ab`` and
+        striking a rule through it on both sides, so the cell contains ink and
+        the ink-ratio rule of :meth:`_classify` would call it present.
+
+        The mark is recognised by its geometry rather than by reading it. A
+        strike stroke is a component that is long and thin, and in a struck-out
+        mark it sits *beside* the written token at the same height. That is what
+        separates it from a signature that happens to be underlined, where the
+        rule sits *below* the writing and therefore overlaps it horizontally.
+        """
+        height, width = mask.shape
+        # Compression and rescaling break a thin strike stroke into fragments,
+        # none of which is long enough to be recognised. Bridging the gaps first
+        # removed the one false positive this rule produced across the
+        # degradation suite, at no cost to the number it detects.
+        bridged = cv2.dilate(
+            mask, cv2.getStructuringElement(cv2.MORPH_RECT, (STRIKE_BRIDGE, 1))
+        )
+        count, _, statistics, _ = cv2.connectedComponentsWithStats(bridged)
+
+        strikes: list[int] = []
+        token: list[int] = []
+        for component in range(1, count):
+            component_width = statistics[component, cv2.CC_STAT_WIDTH]
+            component_height = statistics[component, cv2.CC_STAT_HEIGHT]
+            long_and_thin = (
+                component_width >= self.course.strike_min_width * width
+                and component_height <= self.course.strike_max_height * height
+            )
+            (strikes if long_and_thin else token).append(component)
+
+        if not strikes or not token:
+            return False
+
+        written = max(token, key=lambda c: statistics[c, cv2.CC_STAT_AREA])
+        token_left = statistics[written, cv2.CC_STAT_LEFT]
+        token_width = statistics[written, cv2.CC_STAT_WIDTH]
+        token_centre = statistics[written, cv2.CC_STAT_TOP] + statistics[
+            written, cv2.CC_STAT_HEIGHT
+        ] / 2
+
+        for strike in strikes:
+            strike_left = statistics[strike, cv2.CC_STAT_LEFT]
+            strike_width = statistics[strike, cv2.CC_STAT_WIDTH]
+            strike_centre = statistics[strike, cv2.CC_STAT_TOP] + statistics[
+                strike, cv2.CC_STAT_HEIGHT
+            ] / 2
+
+            shared = max(
+                0,
+                min(token_left + token_width, strike_left + strike_width)
+                - max(token_left, strike_left),
+            )
+            beside = shared / max(min(token_width, strike_width), 1) <= max_overlap
+            same_level = abs(strike_centre - token_centre) <= level_tolerance * height
+            if beside and same_level:
+                return True
+        return False
+
+    # 9. Final Attendance Classification
+
+    def _classify(self, colour_ratio: float, residual_ratio: float) -> tuple[bool, float]:
+        """Apply the dual-evidence decision rule and derive a confidence value."""
+        colour_evidence = colour_ratio / self.course.color_ratio_threshold
+        residual_evidence = residual_ratio / self.course.residual_ratio_threshold
+        evidence = max(colour_evidence, residual_evidence)
+        present = evidence >= 1.0
+
+        if present:
+            confidence = 0.55 + 0.20 * min(evidence, 2.2)
+        else:
+            confidence = 0.95 - 0.30 * evidence
+        return present, float(np.clip(confidence, 0.55, 0.99))
+
+        
+
+    
+
+
+        
