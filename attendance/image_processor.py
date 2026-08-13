@@ -198,5 +198,19 @@ class AttendanceImageProcessor:
             contours, _ = cv2.findContours(grid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             row_count = len(self.course.students)
             candidates: list[np.ndarray] = []
+
+     #==================== 15: filter student table candidates=====================
+            for contour in contours:
+                _, _, box_width, box_height = cv2.boundingRect(contour)
+                aspect_ratio = box_width / max(box_height, 1)
+                # A signing-sheet table is a wide, short block: wide enough to be the
+                # table rather than a word, short enough not to be the whole page,
+                # and tall enough to hold one row per student.
+                wide_enough = box_width > width * 0.30
+                tall_enough = box_height > 20 * row_count
+                not_the_whole_page = box_height < height * 0.75
+                plausible_shape = 1.5 < aspect_ratio < 8.0
+                if wide_enough and tall_enough and not_the_whole_page and plausible_shape:
+                    candidates.append(contour)
     
     
