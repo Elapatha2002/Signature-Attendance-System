@@ -224,4 +224,7 @@ class AttendanceImageProcessor:
             perimeter = cv2.arcLength(contour, True)
             polygon = cv2.approxPolyDP(contour, 0.02 * perimeter, True).reshape(-1, 2)
     
-    
+    #==================== 18: Detect table quadrilateral corners=====================
+            if len(polygon) != 4:
+                polygon = cv2.boxPoints(cv2.minAreaRect(contour))
+            quadrilateral = self._order_points(polygon)
