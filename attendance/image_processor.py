@@ -194,5 +194,9 @@ class AttendanceImageProcessor:
                 cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
                 iterations=2,
             )
+    #==================== 14: Detect student table contours=====================
+            contours, _ = cv2.findContours(grid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            row_count = len(self.course.students)
+            candidates: list[np.ndarray] = []
     
     
