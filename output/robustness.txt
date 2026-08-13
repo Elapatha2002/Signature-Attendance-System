@@ -1,0 +1,23 @@
+Robustness of the attendance classifier under synthetic degradation
+Each condition re-processes all five supplied sheets (30 signature cells).
+
+Condition                 Cells correct  Accuracy  Sheets exact  Notes
+------------------------------------------------------------------------------------------------
+None (baseline)                   30/30    100.0%           5/5  -
+JPEG re-encode q95                29/30     96.7%           4/5  sheet2.jpeg misread
+Rotation -10 deg                  30/30    100.0%           5/5  -
+Rotation -5 deg                   30/30    100.0%           5/5  -
+Rotation +5 deg                   30/30    100.0%           5/5  -
+Rotation +10 deg                  30/30    100.0%           5/5  -
+Perspective tilt 8%               30/30    100.0%           5/5  -
+Perspective tilt 15%              29/30     96.7%           4/5  sheet2.jpeg misread
+Downscale to 50%                  30/30    100.0%           5/5  -
+Downscale to 30%                  29/30     96.7%           4/5  sheet2.jpeg misread
+Downscale to 20%                  29/30     96.7%           4/5  sheet2.jpeg misread
+Gaussian blur 7 px                29/30     96.7%           4/5  sheet2.jpeg misread
+Gaussian blur 15 px               29/30     96.7%           4/5  sheet3.jpeg misread
+Over-exposure +30%                30/30    100.0%           5/5  -
+Under-exposure -35%               29/30     96.7%           4/5  sheet2.jpeg misread
+Sensor noise sigma 15             30/30    100.0%           5/5  -
+JPEG quality 30                   30/30    100.0%           5/5  -
+JPEG quality 10                   29/30     96.7%           4/5  sheet2.jpeg misread
