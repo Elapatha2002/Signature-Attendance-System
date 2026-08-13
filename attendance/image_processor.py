@@ -107,4 +107,40 @@ class AttendanceImageProcessor:
                 31,
                 -10,
             )
+
+     #==================== 9: Skew estimation=====================
+        @staticmethod
+        def estimate_skew(binary: np.ndarray, maximum_angle: float = 20.0) -> float:
+            """Estimate the page rotation in degrees from the printed table rules.
     
+            Morphological line extraction relies on strictly horizontal and vertical
+            structuring elements, so a tilted photograph breaks the grid into short
+            fragments and the table can no longer be found. A probabilistic Hough
+            transform gives the dominant direction of the long printed rules and the
+            median of those angles is used to level the page first.
+            """
+            height, width = binary.shape
+            segments = cv2.HoughLinesP(
+                binary,
+                rho=1,
+                theta=np.pi / 720,
+                threshold=120,
+                minLineLength=int(width * 0.25),
+                maxLineGap=12,
+            )
+            if segments is None:
+                return 0.0
+    
+            angles: list[float] = []
+            for x1, y1, x2, y2 in segments.reshape(-1, 4):
+                angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+                if angle > 90:
+                    angle -= 180
+                elif angle < -90:
+                    angle += 180
+                if abs(angle) <= maximum_angle:
+                    angles.append(angle)
+    
+            if len(angles) < 3:
+                return 0.0
+            return float(np.median(angles))
