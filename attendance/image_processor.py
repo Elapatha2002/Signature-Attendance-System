@@ -267,3 +267,188 @@ class AttendanceImageProcessor:
                     self.max_table_height,
                 )
             )
+        # --------------------------------------------------------- grid detection
+
+    @staticmethod
+    def _separator_positions(line_mask: np.ndarray, axis: int) -> list[int]:
+        """Return the centre position of every printed separator in ``line_mask``.
+
+        ``axis=0`` projects onto the rows and therefore returns the y positions of
+        horizontal separators; ``axis=1`` returns the x positions of vertical ones.
+        """
+        profile = line_mask.sum(axis=1 if axis == 0 else 0) / 255.0
+        span = line_mask.shape[1] if axis == 0 else line_mask.shape[0]
+        filled = profile > SEPARATOR_FILL_RATIO * span
+
+        positions: list[int] = []
+        current_run: list[int] = []
+        for index, is_filled in enumerate(filled):
+            if is_filled:
+                current_run.append(index)
+            elif current_run:
+                positions.append(int(round(float(np.mean(current_run)))))
+                current_run = []
+        if current_run:
+            positions.append(int(round(float(np.mean(current_run)))))
+        return positions
+
+    def _detect_grid(
+        self, warped_binary: np.ndarray
+    ) -> tuple[list[int], list[int], np.ndarray, np.ndarray]:
+        """Detect the horizontal and vertical separators of the corrected table."""
+        height, width = warped_binary.shape
+        horizontal = cv2.morphologyEx(
+            warped_binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, width // 3), 1)),
+        )
+        vertical = cv2.morphologyEx(
+            warped_binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, height // 4))),
+        )
+        # Bridge the gaps a slightly skewed separator leaves in the projection.
+        horizontal = cv2.dilate(
+            horizontal, cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, width // 6), 1))
+        )
+        vertical = cv2.dilate(
+            vertical, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, height // 6)))
+        )
+        rows = self._separator_positions(horizontal, axis=0)
+        columns = self._separator_positions(vertical, axis=1)
+        return rows, columns, horizontal, vertical
+
+    def _row_bounds(self, separators: list[int], height: int) -> tuple[list[tuple[int, int]], bool]:
+        """Return the (top, bottom) pixel bounds of each student row.
+
+        The sheet has one header row followed by one row per student, so the
+        student table is a run of ``len(students) + 2`` horizontal separators
+        whose data-row gaps are equal. More separators than that are normal: on a
+        tilted photograph the line morphology can merge the small date table
+        above into the same contour, and the corrected image then contains both
+        tables. The correct block is therefore chosen as the candidate window
+        with the most uniform data-row spacing rather than assumed to be the
+        whole image.
+
+        Only if no such window exists does the method fall back to an equal
+        split, which drifts because the header row is shorter than the data rows.
+        """
+        row_count = len(self.course.students)
+        window_size = row_count + 2
+
+        best_window: list[int] | None = None
+        best_score = float("inf")
+        for start in range(0, len(separators) - window_size + 1):
+            window = separators[start : start + window_size]
+            gaps = [second - first for first, second in zip(window, window[1:])]
+            header_gap, data_gaps = gaps[0], gaps[1:]
+            if min(data_gaps) <= 0:
+                continue
+
+            average_gap = sum(data_gaps) / len(data_gaps)
+            # A data row must be a sensible size, and the header row must be
+            # roughly comparable to a data row rather than a whole second table.
+            if average_gap < 8 or not 0.4 <= header_gap / average_gap <= 1.8:
+                continue
+
+            spread = max(data_gaps) - min(data_gaps)
+            score = spread / average_gap
+            if score < best_score - 1e-9:
+                best_score, best_window = score, window
+
+        if best_window is not None:
+            return (
+                [(best_window[i + 1], best_window[i + 2]) for i in range(row_count)],
+                True,
+            )
+
+        fitted = self._fit_row_pitch(separators, height, row_count)
+        if fitted is not None:
+            return fitted, True
+
+        band = height / (row_count + 1)
+        return (
+            [
+                (int(round(band * (index + 1))), int(round(band * (index + 2))))
+                for index in range(row_count)
+            ],
+            False,
+        )
+
+    @staticmethod
+    def _fit_row_pitch(
+        separators: list[int], height: int, row_count: int
+    ) -> list[tuple[int, int]] | None:
+        """Recover the row boundaries when some printed rules are too faint to detect.
+
+        The data rows of a signing sheet are equally spaced, so the boundaries
+        form an arithmetic sequence. When a faint rule is missed the exact-window
+        search above finds nothing, but the sequence can still be recovered from
+        the rules that were seen: the pitch is the median observed gap, and the
+        offset is the anchor whose sequence best explains them.
+
+        The fit is scored against the separators that were *observed*, not
+        against the model points, so a missing rule costs nothing while a rule
+        that contradicts the model does.
+        """
+        if len(separators) < 4:
+            return None
+        gaps = [b - a for a, b in zip(separators, separators[1:]) if b - a > 8]
+        if not gaps:
+            return None
+        pitch = float(np.median(gaps))
+
+                # The table holds one header band and one band per student, so a
+        # plausible pitch is close to height / (students + 1). This rejects a
+        # sequence fitted to unrelated marks.
+        expected_pitch = height / (row_count + 1)
+        if not 0.70 * expected_pitch <= pitch <= 1.35 * expected_pitch:
+            return None
+
+        best_model: list[float] | None = None
+        best_error = float("inf")
+        best_support = 0
+        for anchor in separators:
+            model = [anchor + step * pitch for step in range(row_count + 1)]
+            if model[0] < -2 or model[-1] > height * 1.15:
+                continue
+            observed = [
+                s for s in separators
+                if model[0] - 0.6 * pitch <= s <= model[-1] + 0.6 * pitch
+            ]
+            if len(observed) < 4:
+                continue
+            # A model point counts as supported when a printed rule was actually
+            # seen near it. Requiring several supported points stops a sequence
+            # being fitted through noise.
+            supported = sum(
+                1 for m in model if min(abs(m - s) for s in separators) <= 0.25 * pitch
+            )
+            if supported < 4:
+                continue
+            error = sum(min(abs(m - s) for m in model) for s in observed) / len(observed)
+            if error < best_error or (error == best_error and supported > best_support):
+                best_error, best_model, best_support = error, model, supported
+
+        if best_model is None or best_error >= 0.18 * pitch:
+            return None
+        return [
+            (int(round(best_model[i])), int(round(min(best_model[i + 1], height))))
+            for i in range(row_count)
+        ]
+
+    def _signature_column(
+        self, separators: list[int], width: int
+    ) -> tuple[tuple[int, int], bool]:
+        """Return the (left, right) pixel bounds of the signature column."""
+        if len(separators) >= 2:
+            left, right = separators[-2], separators[-1]
+            wide_enough = (right - left) > 0.08 * width
+            rightmost = right > 0.9 * width
+            if wide_enough and rightmost:
+                return (left, right), True
+
+        left = int(round(width * self.course.signature_column_start))
+        return (left, width - 1), False
+
+        
